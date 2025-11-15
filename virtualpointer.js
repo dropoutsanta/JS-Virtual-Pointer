@@ -9,7 +9,112 @@ var virtualpointer = function() {
         default_flick_duration  = 200,
         default_click_duration  = Math.random() * (250 - 20) + 20,
         default_screen_x_offset = 1,
-        default_screen_y_offset = 30;
+        default_screen_y_offset = 30,
+        show_visual_cursor      = true,
+        cursor_element          = null,
+        ripple_element          = null;
+
+    // initialize visual cursor
+    function init_visual_cursor() {
+        if (cursor_element) return; // already initialized
+
+        // create cursor element
+        cursor_element = document.createElement('div');
+        cursor_element.id = 'virtualpointer-cursor';
+        cursor_element.style.cssText = 
+            'position: fixed;' +
+            'width: 20px;' +
+            'height: 20px;' +
+            'border-radius: 50%;' +
+            'background: rgba(255, 0, 0, 0.6);' +
+            'border: 2px solid rgba(255, 255, 255, 0.9);' +
+            'pointer-events: none;' +
+            'z-index: 999999;' +
+            'transition: all 0.1s ease-out;' +
+            'box-shadow: 0 0 10px rgba(255, 0, 0, 0.5);' +
+            'transform: translate(-50%, -50%);';
+
+        // create ripple element for clicks
+        ripple_element = document.createElement('div');
+        ripple_element.id = 'virtualpointer-ripple';
+        ripple_element.style.cssText = 
+            'position: fixed;' +
+            'width: 10px;' +
+            'height: 10px;' +
+            'border-radius: 50%;' +
+            'background: rgba(255, 0, 0, 0.4);' +
+            'border: 2px solid rgba(255, 0, 0, 0.6);' +
+            'pointer-events: none;' +
+            'z-index: 999998;' +
+            'transform: translate(-50%, -50%) scale(0);' +
+            'opacity: 0;';
+
+        document.body.appendChild(cursor_element);
+        document.body.appendChild(ripple_element);
+    }
+
+    // update visual cursor position
+    function update_visual_cursor(clientX, clientY, element) {
+        if (!show_visual_cursor || !cursor_element) return;
+
+        // if element is provided, use its precise viewport position
+        if (element) {
+            var rect = element.getBoundingClientRect();
+            var centerX = rect.left + (rect.width / 2);
+            var centerY = rect.top + (rect.height / 2);
+            cursor_element.style.left = centerX + 'px';
+            cursor_element.style.top = centerY + 'px';
+        } else {
+            // fallback: convert document coordinates to viewport coordinates
+            var viewportX = clientX - (window.pageXOffset || document.documentElement.scrollLeft);
+            var viewportY = clientY - (window.pageYOffset || document.documentElement.scrollTop);
+            cursor_element.style.left = viewportX + 'px';
+            cursor_element.style.top = viewportY + 'px';
+        }
+    }
+
+    // show click ripple effect
+    function show_click_ripple(clientX, clientY, element) {
+        if (!show_visual_cursor || !ripple_element) return;
+
+        // if element is provided, use its precise viewport position
+        if (element) {
+            var rect = element.getBoundingClientRect();
+            var centerX = rect.left + (rect.width / 2);
+            var centerY = rect.top + (rect.height / 2);
+            ripple_element.style.left = centerX + 'px';
+            ripple_element.style.top = centerY + 'px';
+        } else {
+            // fallback: convert document coordinates to viewport coordinates
+            var viewportX = clientX - (window.pageXOffset || document.documentElement.scrollLeft);
+            var viewportY = clientY - (window.pageYOffset || document.documentElement.scrollTop);
+            ripple_element.style.left = viewportX + 'px';
+            ripple_element.style.top = viewportY + 'px';
+        }
+
+        ripple_element.style.transition = 'none';
+        ripple_element.style.transform = 'translate(-50%, -50%) scale(0)';
+        ripple_element.style.opacity = '1';
+
+        // trigger reflow to restart animation
+        ripple_element.offsetHeight;
+
+        ripple_element.style.transition = 'all 0.4s ease-out';
+        ripple_element.style.transform = 'translate(-50%, -50%) scale(4)';
+        ripple_element.style.opacity = '0';
+    }
+
+    // remove visual cursor
+    function remove_visual_cursor() {
+        if (cursor_element && cursor_element.parentNode) {
+            cursor_element.parentNode.removeChild(cursor_element);
+            cursor_element = null;
+        }
+        if (ripple_element && ripple_element.parentNode) {
+            ripple_element.parentNode.removeChild(ripple_element);
+            ripple_element = null;
+        }
+    }
 
     // function to dispatch event inside the browser
     function send_event(type, clientX, clientY, element, button, screenX, screenY, isTouchEvent, scrollLeft, scrollTop) {
@@ -24,6 +129,14 @@ var virtualpointer = function() {
         }
         if (!screenY) {
             screenY = clientY + default_screen_y_offset;
+        }
+
+        // update visual cursor position (use element for precise positioning)
+        update_visual_cursor(clientX, clientY, element);
+
+        // show ripple on click events (use element for precise positioning)
+        if (type === 'click' || type === 'mousedown' || type === 'touchstart') {
+            show_click_ripple(clientX, clientY, element);
         }
 
         // if button is not specified, assume the button is the left mouse button
@@ -82,6 +195,56 @@ var virtualpointer = function() {
 
         // return values
         return {x: x_offset, y: y_offset};
+    }
+
+    // check if element is in viewport
+    function is_element_in_viewport(element) {
+        var rect = element.getBoundingClientRect();
+        return (
+            rect.top >= 0 &&
+            rect.left >= 0 &&
+            rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
+            rect.right <= (window.innerWidth || document.documentElement.clientWidth)
+        );
+    }
+
+    // smoothly scroll element into view
+    function scroll_to_element(element, callback) {
+        if (is_element_in_viewport(element)) {
+            // element already visible, execute callback immediately
+            if (callback) callback();
+            return;
+        }
+
+        // scroll element into view with smooth behavior
+        element.scrollIntoView({ 
+            behavior: 'smooth', 
+            block: 'center',
+            inline: 'center'
+        });
+
+        // wait for scroll to complete before executing callback
+        // detect when scrolling stops
+        var scrollTimeout;
+        var lastScrollTop = window.pageYOffset || document.documentElement.scrollTop;
+        var lastScrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+
+        var checkScrollComplete = function() {
+            var currentScrollTop = window.pageYOffset || document.documentElement.scrollTop;
+            var currentScrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+
+            if (currentScrollTop === lastScrollTop && currentScrollLeft === lastScrollLeft) {
+                // scrolling has stopped
+                if (callback) callback();
+            } else {
+                // still scrolling, check again
+                lastScrollTop = currentScrollTop;
+                lastScrollLeft = currentScrollLeft;
+                scrollTimeout = setTimeout(checkScrollComplete, 50);
+            }
+        };
+
+        scrollTimeout = setTimeout(checkScrollComplete, 100);
     }
 
     // constructs mouse movement stack to move mouse to an element over a set amount of time
@@ -285,6 +448,10 @@ var virtualpointer = function() {
 
     // function to begin execution of events inside event_queue
     function start_processing_events() {
+        // ensure visual cursor is initialized if show_visual_cursor is enabled
+        if (show_visual_cursor) {
+            init_visual_cursor();
+        }
         setTimeout(process_event_queue, first_event_offset);
     }
 
@@ -293,40 +460,52 @@ var virtualpointer = function() {
         move_mouse_to_element: function(element, duration) {
             if (!element) return;
             
-            build_mouse_movement_queue(element, duration);
-            start_processing_events();
+            scroll_to_element(element, function() {
+                build_mouse_movement_queue(element, duration);
+                start_processing_events();
+            });
         },
         click_element: function(element) {
             if (!element) return;
 
-            build_click_event_queue(element);
-            start_processing_events();
+            scroll_to_element(element, function() {
+                build_click_event_queue(element);
+                start_processing_events();
+            });
         },
         move_to_element_and_click: function(element, duration) {
             if (!element) return;
 
-            build_mouse_movement_queue(element, duration);
-            build_click_event_queue(element);
-            start_processing_events();
+            scroll_to_element(element, function() {
+                build_mouse_movement_queue(element, duration);
+                build_click_event_queue(element);
+                start_processing_events();
+            });
         },
         tap_element: function(element) {
             if (!element) return;
 
-            build_click_event_queue(element, null, true);
-            start_processing_events();
+            scroll_to_element(element, function() {
+                build_click_event_queue(element, null, true);
+                start_processing_events();
+            });
         },
         double_tap_element: function(element) {
             if (!element) return;
 
-            build_click_event_queue(element, null, true);
-            build_click_event_queue(element, 25, true);
-            start_processing_events();
+            scroll_to_element(element, function() {
+                build_click_event_queue(element, null, true);
+                build_click_event_queue(element, 25, true);
+                start_processing_events();
+            });
         },
         flick_to_element: function(element, duration) {
             if (!element) return;
 
-            build_flick_event_queue(element, duration);
-            start_processing_events();
+            scroll_to_element(element, function() {
+                build_flick_event_queue(element, duration);
+                start_processing_events();
+            });
         },
         // used for executing a serialized set of JSON events
         run_serialized_events: function(events) {
@@ -334,6 +513,16 @@ var virtualpointer = function() {
 
             event_queue = events;
             start_processing_events();
+        },
+        // enable visual cursor to see where events are happening
+        show_cursor: function() {
+            show_visual_cursor = true;
+            init_visual_cursor();
+        },
+        // disable and remove visual cursor
+        hide_cursor: function() {
+            show_visual_cursor = false;
+            remove_visual_cursor();
         }
     }
 }();

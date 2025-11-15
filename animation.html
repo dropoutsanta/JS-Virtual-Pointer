@@ -1,0 +1,591 @@
+<!doctype html>
+
+<html lang="en">
+
+<head>
+
+<meta charset="utf-8"/>
+
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+
+<title>Fiery Glass Orb (WebGL, single file)</title>
+
+<style>
+
+  html,body{height:100%;margin:0;background:#0d1117;color:#c9d1d9;font-family:system-ui}
+
+  #wrap{display:flex;flex-direction:column;height:100%;transition:all 0.5s ease}
+
+  #top{padding:8px 12px;display:flex;gap:16px;align-items:center}
+
+  #c{flex:1;display:block;width:100%;height:100%;transition:opacity 0.5s ease}
+
+  .btn{padding:6px 10px;border:1px solid #30363d;border-radius:8px;background:#161b22;color:#c9d1d9;cursor:pointer}
+
+  .badge{opacity:.7;font-size:12px}
+
+  /* Chat state styles */
+  #wrap{position:relative}
+  #top{position:relative;z-index:3}
+  #c{position:relative;z-index:1;transition:opacity 0.5s ease}
+  #wrap.chat #c{opacity:0;pointer-events:none}
+  #chat-container{position:absolute;top:0;left:0;right:0;bottom:0;display:flex;flex-direction:column;padding:20px;padding-top:60px;z-index:2;opacity:0;transition:opacity 0.5s ease;pointer-events:none}
+  #wrap:hover #chat-container{opacity:1;pointer-events:auto}
+  #wrap.chat #chat-container{opacity:1;pointer-events:auto}
+  #chat-messages{flex:1;overflow-y:auto;margin-bottom:20px;padding:10px;border:1px solid #30363d;border-radius:12px;background:#161b22}
+  #chat-input-container{display:flex;gap:12px;align-items:center}
+  #chat-input{flex:1;padding:12px 20px;border:1px solid #30363d;border-radius:50px;background:#161b22;color:#c9d1d9;font-size:16px;outline:none}
+  #chat-input:focus{border-color:#58a6ff}
+  #send-btn{padding:12px 24px;border:1px solid #30363d;border-radius:50px;background:#238636;color:#c9d1d9;cursor:pointer;font-weight:500}
+  #send-btn:hover{background:#2ea043}
+
+  .message{margin:8px 0;padding:10px 16px;border-radius:18px;max-width:70%;word-wrap:break-word}
+  .message.user{background:#58a6ff;color:#0d1117;margin-left:auto;text-align:right}
+  .message.ai{background:#161b22;border:1px solid #30363d;margin-right:auto;text-align:left}
+
+</style>
+
+</head>
+
+<body>
+
+<div id="wrap">
+
+  <div id="top">
+
+    <button id="pause" class="btn">Pause (Space)</button>
+
+    <button id="rec" class="btn">Record 6s (R)</button>
+
+    <button id="png" class="btn">Save PNG (P)</button>
+
+    <span class="badge">Fiery glass orb • WebGL (no libs) • loopable • hover for chat</span>
+
+  </div>
+
+  <canvas id="c"></canvas>
+
+  <div id="chat-container">
+    <div id="chat-messages"></div>
+    <div id="chat-input-container">
+      <input type="text" id="chat-input" placeholder="Ask me anything about the fiery orb..." maxlength="500">
+      <button id="send-btn">Send</button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+
+const canvas = document.getElementById('c');
+
+const gl = canvas.getContext('webgl',{preserveDrawingBuffer:true});
+
+if(!gl) alert('WebGL not supported');
+
+function fit(){
+
+  const dpr = Math.min(window.devicePixelRatio||1, 2);
+
+  const w = Math.floor(window.innerWidth * dpr);
+
+  const h = Math.floor((window.innerHeight-40) * dpr);
+
+  canvas.width = w; canvas.height = h;
+
+  canvas.style.width = '100%'; canvas.style.height = '100%';
+
+  gl.viewport(0,0,w,h);
+
+}
+
+window.addEventListener('resize', fit); fit();
+
+const vert = `
+
+attribute vec2 a;
+
+void main(){ gl_Position=vec4(a,0.0,1.0); }
+
+`;
+
+const frag = `
+
+precision highp float;
+
+uniform vec2  uRes;
+
+uniform float uTime;
+
+// --- hash & noise (fast) ---
+
+float hash(vec3 p){
+
+  p = fract(p*0.3183099 + vec3(0.1,0.2,0.3));
+
+  p *= 17.0;
+
+  return fract(p.x*p.y*p.z*(p.x+p.y+p.z));
+
+}
+
+float noise(vec3 p){
+
+  vec3 i = floor(p), f = fract(p);
+
+  float n = dot(i, vec3(1.0,57.0,113.0));
+
+  vec3 u = f*f*(3.0-2.0*f);
+
+  float a = hash(i);
+
+  float b = hash(i+vec3(1,0,0));
+
+  float c = hash(i+vec3(0,1,0));
+
+  float d = hash(i+vec3(1,1,0));
+
+  float e = hash(i+vec3(0,0,1));
+
+  float f1= hash(i+vec3(1,0,1));
+
+  float g = hash(i+vec3(0,1,1));
+
+  float h = hash(i+vec3(1,1,1));
+
+  return mix(
+
+    mix(mix(a,b,u.x), mix(c,d,u.x), u.y),
+
+    mix(mix(e,f1,u.x),mix(g,h,u.x), u.y),
+
+    u.z
+
+  );
+
+}
+
+float fbm(vec3 p){
+
+  float s=0.0, a=0.5;
+
+  for(int i=0;i<5;i++){
+
+    s += a*noise(p);
+
+    p *= 2.02; a *= 0.5;
+
+  }
+
+  return s;
+
+}
+
+// sphere SDF
+
+float sdfSphere(vec3 p, float r){ return length(p)-r; }
+
+// simple raymarch
+
+float raymarch(vec3 ro, vec3 rd){
+
+  float t=0.0;
+
+  for(int i=0;i<100;i++){
+
+    vec3 p = ro + rd*t;
+
+    float d = sdfSphere(p, 1.0);
+
+    t += d*0.6;
+
+    if(d<0.001 || t>6.0) break;
+
+  }
+
+  return t;
+
+}
+
+vec3 getNormal(vec3 p){
+
+  float e=0.002;
+
+  float dx = sdfSphere(p+vec3(e,0,0),1.0)-sdfSphere(p-vec3(e,0,0),1.0);
+
+  float dy = sdfSphere(p+vec3(0,e,0),1.0)-sdfSphere(p-vec3(0,e,0),1.0);
+
+  float dz = sdfSphere(p+vec3(0,0,e),1.0)-sdfSphere(p-vec3(0,0,e),1.0);
+
+  return normalize(vec3(dx,dy,dz));
+
+}
+
+vec3 firePalette(float x){
+
+  // map 0..1 to fire colors (deep red -> orange -> yellow -> white)
+
+  vec3 c1=vec3(0.2,0.0,0.0);
+
+  vec3 c2=vec3(0.8,0.1,0.0);
+
+  vec3 c3=vec3(1.0,0.6,0.0);
+
+  vec3 c4=vec3(1.0,0.9,0.6);
+
+  return mix(mix(c1,c2,smoothstep(0.0,0.3,x)),
+
+             mix(c3,c4,smoothstep(0.3,1.0,x)),
+
+             smoothstep(0.4,0.95,x));
+
+}
+
+void main(){
+
+  vec2 uv = (gl_FragCoord.xy*2.0 - uRes)/min(uRes.x,uRes.y);
+
+  // camera
+
+  float t = uTime;
+
+  vec3 ro = vec3(0.0, 0.0, 3.0);
+
+  vec3 ta = vec3(0.0);
+
+  vec3 ww = normalize(ta-ro);
+
+  vec3 uu = normalize(cross(vec3(0,1,0),ww));
+
+  vec3 vv = cross(ww,uu);
+
+  vec3 rd = normalize(uv.x*uu + uv.y*vv + 1.7*ww);
+
+  // raymarch to sphere
+
+  float dist = raymarch(ro, rd);
+
+  vec3 col = vec3(0.02,0.03,0.06); // background
+
+  if(dist<6.0){
+
+    vec3 p = ro + rd*dist;
+
+    vec3 n = getNormal(p);
+
+    // --- "fire" inside: sample procedural noise along refracted ray ---
+
+    // fake refraction vector
+
+    vec3 refr = refract(rd, n, 1.0/1.5);
+
+    vec3 q = p + refr*0.5;
+
+    // swirling domain warp
+
+    float swirl = 0.35*sin(0.6*t) + 0.55;
+
+    vec3 warp = vec3(
+
+      fbm(q*2.0 + vec3(0.0, t*0.6, 0.0)),
+
+      fbm(q*2.5 + vec3(t*0.4, 0.0, 0.0)),
+
+      fbm(q*3.0 + vec3(0.0, 0.0, t*0.5))
+
+    );
+
+    vec3 pp = q + 0.6*warp*swirl;
+
+    // fire intensity
+
+    float fire = fbm(pp*3.0 + vec3(0.0, t*0.8, 0.0));
+
+    fire = pow(fire, 1.5); // make it more contrasty
+
+    // surface reflection
+
+    float fresnel = pow(1.0 - dot(-rd, n), 2.0);
+
+    // final color mix
+
+    vec3 fireCol = firePalette(fire);
+
+    vec3 glassCol = vec3(0.1, 0.2, 0.4) + fresnel * vec3(0.8, 0.9, 1.0);
+
+    col = mix(glassCol, fireCol, 0.7 * fire);
+
+    // add some rim lighting
+
+    col += fresnel * vec3(0.5, 0.7, 1.0) * 0.3;
+
+  }
+
+  gl_FragColor = vec4(col, 1.0);
+
+}
+
+`;
+
+function createShader(gl, type, src){
+
+  const s = gl.createShader(type);
+
+  gl.shaderSource(s, src);
+
+  gl.compileShader(s);
+
+  if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)){
+
+    console.error(gl.getShaderInfoLog(s));
+
+    gl.deleteShader(s);
+
+    return null;
+
+  }
+
+  return s;
+
+}
+
+function createProgram(gl, vs, fs){
+
+  const p = gl.createProgram();
+
+  gl.attachShader(p, vs);
+
+  gl.attachShader(p, fs);
+
+  gl.linkProgram(p);
+
+  if(!gl.getProgramParameter(p, gl.LINK_STATUS)){
+
+    console.error(gl.getProgramInfoLog(p));
+
+    gl.deleteProgram(p);
+
+    return null;
+
+  }
+
+  return p;
+
+}
+
+const vs = createShader(gl, gl.VERTEX_SHADER, vert);
+
+const fs = createShader(gl, gl.FRAGMENT_SHADER, frag);
+
+const prog = createProgram(gl, vs, fs);
+
+gl.useProgram(prog);
+
+const quad = new Float32Array([-1,-1, 1,-1, -1,1, 1,1]);
+
+const quadBuf = gl.createBuffer();
+
+gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+
+gl.bufferData(gl.ARRAY_BUFFER, quad, gl.STATIC_DRAW);
+
+const aLoc = gl.getAttribLocation(prog, 'a');
+
+gl.enableVertexAttribArray(aLoc);
+
+gl.vertexAttribPointer(aLoc, 2, gl.FLOAT, false, 0, 0);
+
+const uResLoc = gl.getUniformLocation(prog, 'uRes');
+
+const uTimeLoc = gl.getUniformLocation(prog, 'uTime');
+
+let paused = false;
+
+let time = 0;
+
+let startTime = Date.now();
+
+function draw(){
+
+  if(!paused){
+
+    time = (Date.now() - startTime) * 0.001;
+
+  }
+
+  gl.uniform2f(uResLoc, canvas.width, canvas.height);
+
+  gl.uniform1f(uTimeLoc, time);
+
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+  requestAnimationFrame(draw);
+
+}
+
+draw();
+
+// Chat functionality - hover based
+const wrap = document.getElementById('wrap');
+let chatInitialized = false;
+
+wrap.addEventListener('mouseenter', () => {
+  wrap.classList.add('chat');
+  setTimeout(() => {
+    const input = document.getElementById('chat-input');
+    if (input) input.focus();
+  }, 400);
+  if (!chatInitialized) {
+    // Add welcome message on first hover
+    setTimeout(() => addMessage('Welcome! Ask me anything about the fiery glass orb animation.', 'ai'), 600);
+    chatInitialized = true;
+  }
+});
+
+wrap.addEventListener('mouseleave', () => {
+  wrap.classList.remove('chat');
+});
+
+function addMessage(text, type) {
+  const messages = document.getElementById('chat-messages');
+  const messageDiv = document.createElement('div');
+  messageDiv.className = `message ${type}`;
+  messageDiv.textContent = text;
+  messages.appendChild(messageDiv);
+  messages.scrollTop = messages.scrollHeight;
+}
+
+function sendMessage() {
+  const input = document.getElementById('chat-input');
+  const text = input.value.trim();
+  if (text) {
+    addMessage(text, 'user');
+    input.value = '';
+
+    // Simple AI responses about the orb
+    setTimeout(() => {
+      let response = '';
+      const lowerText = text.toLowerCase();
+
+      if (lowerText.includes('color') || lowerText.includes('fire')) {
+        response = 'The fiery colors come from a custom palette that transitions from deep red through orange to bright yellow and white, creating a realistic flame effect!';
+      } else if (lowerText.includes('glass') || lowerText.includes('sphere')) {
+        response = 'The glass sphere uses raymarching and refraction techniques to create a realistic transparent surface that lets you see the swirling fire inside.';
+      } else if (lowerText.includes('animation') || lowerText.includes('move')) {
+        response = 'The animation uses procedural noise with domain warping and swirling motion to create the dynamic, ever-changing fire patterns inside the orb.';
+      } else if (lowerText.includes('webgl') || lowerText.includes('shader')) {
+        response = 'This is rendered entirely with WebGL fragment shaders - no external libraries, just pure GPU-accelerated graphics programming!';
+      } else if (lowerText.includes('code') || lowerText.includes('how')) {
+        response = 'The animation combines raymarching, fractal noise, refraction simulation, and real-time rendering techniques. It\'s all written in GLSL shaders!';
+      } else {
+        response = 'That\'s an interesting question about the fiery glass orb! The animation uses advanced shader techniques to create this mesmerizing effect. What specifically would you like to know?';
+      }
+
+      addMessage(response, 'ai');
+    }, 500 + Math.random() * 1000);
+  }
+}
+
+document.getElementById('send-btn').addEventListener('click', sendMessage);
+
+document.getElementById('chat-input').addEventListener('keypress', e => {
+  if (e.key === 'Enter') {
+    sendMessage();
+  }
+});
+
+document.getElementById('pause').addEventListener('click', () => {
+
+  paused = !paused;
+
+  document.getElementById('pause').textContent = paused ? 'Resume (Space)' : 'Pause (Space)';
+
+});
+
+document.addEventListener('keydown', e => {
+
+  if(e.code === 'Space'){
+
+    paused = !paused;
+
+    document.getElementById('pause').textContent = paused ? 'Resume (Space)' : 'Pause (Space)';
+
+    e.preventDefault();
+
+  }
+
+  if(e.key === 'r' || e.key === 'R'){
+
+    // Record 6 seconds
+
+    const frames = [];
+
+    const originalTime = time;
+
+    const frameRate = 30;
+
+    const duration = 6;
+
+    const totalFrames = frameRate * duration;
+
+    let frameCount = 0;
+
+    const recordFrame = () => {
+
+      if(frameCount < totalFrames){
+
+        time = originalTime + frameCount / frameRate;
+
+        gl.uniform2f(uResLoc, canvas.width, canvas.height);
+
+        gl.uniform1f(uTimeLoc, time);
+
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+        const data = new Uint8Array(canvas.width * canvas.height * 4);
+
+        gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, data);
+
+        frames.push(data.slice());
+
+        frameCount++;
+
+        setTimeout(recordFrame, 1000 / frameRate);
+
+      } else {
+
+        // Here you would typically save frames as GIF or video
+
+        console.log('Recording complete: ' + frames.length + ' frames');
+
+        time = originalTime;
+
+      }
+
+    };
+
+    recordFrame();
+
+  }
+
+  if(e.key === 'p' || e.key === 'P'){
+
+    // Save PNG
+
+    const link = document.createElement('a');
+
+    link.download = 'fiery-orb.png';
+
+    link.href = canvas.toDataURL();
+
+    link.click();
+
+  }
+
+});
+
+</script>
+
+</body>
+
+</html>
